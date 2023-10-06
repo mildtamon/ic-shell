@@ -36,10 +36,25 @@ void printBuffer(char** buffer, int start) {
 }
 
 void command(char** buffer, char** prev_buffer) {
-    
+
     // echo
     if (strcmp(buffer[0], "echo") == 0 && buffer[1] != NULL) {
-        printBuffer(buffer, 1);
+        if (strcmp(buffer[1], "$?") == 0) {
+            // read exit number from file
+            FILE *fp = fopen("exitNum", "r");
+            if (fp == NULL) {
+                printf("no previous exit number\n");
+            } else {
+                char num[MAX_CMD_BUFFER];
+                while (fgets(num, sizeof(num), fp) != NULL) {
+                    fputs(num, stdout);
+                    printf("\n");
+                    fclose(fp);
+                }
+            }
+        } else {
+            printBuffer(buffer, 1);
+        }
     }
 
     // !!
@@ -64,7 +79,12 @@ void command(char** buffer, char** prev_buffer) {
 
         printf("Closing IC shell\n");
         exit(exit_num & 0xFF);   // truncate to fit in 8 bits
-        
+    }
+
+    // ## comment
+    else if (strcmp(buffer[0], "##") == 0) {
+        // do nothing
+
     } else {
         printf("bad command\n");
     }
@@ -85,18 +105,46 @@ char** copy(char** tokenList) {
     return copyList;
 }
 
+void readScript(FILE *file) {
+    if (file == NULL) {
+        printf("invalid file\n");
+    } else {
+        char buffer[MAX_CMD_BUFFER];
+        char** prev_buffer = NULL;
+
+        while (fgets(buffer, sizeof(buffer), file) != NULL) {
+            if (buffer[0] != '\n') {
+                fputs(buffer, file);
+                char** curr_buffer = tokenize(buffer);
+                command(curr_buffer, prev_buffer);
+                prev_buffer = copy(curr_buffer);
+                free(curr_buffer);
+            }
+        }
+        fclose(file);
+    }
+}
+
 int main(int arg, char *argv[]) {
 
-    char buffer[MAX_CMD_BUFFER];
-    char** prev_buffer = NULL;
-    printf("Starting IC shell\n");
-    while (1) {
-        printf("icsh $ ");
-        fgets(buffer, 255, stdin);
-        // printf("you said: %s\n", buffer);
-        char** curr_buffer = tokenize(buffer);
-        command(curr_buffer, prev_buffer);
-        prev_buffer = copy(curr_buffer);
-        free(curr_buffer);      // free current buffer before getting replace if still in loop
+    // script mode
+    if (arg > 1) {
+        // create a FILE from argument (file path) - read mode
+        FILE *file = fopen(argv[1], "r");
+        readScript(file);
+
+    } else {    // interactive mode
+        char buffer[MAX_CMD_BUFFER];
+        char** prev_buffer = NULL;
+        printf("Starting IC shell\n");
+        while (1) {
+            printf("icsh $ ");
+            fgets(buffer, 255, stdin);
+            // printf("you said: %s\n", buffer);
+            char** curr_buffer = tokenize(buffer);
+            command(curr_buffer, prev_buffer);
+            prev_buffer = copy(curr_buffer);
+            free(curr_buffer);      // free current buffer before getting replace if still in loop
+        }
     }
 }
