@@ -35,6 +35,47 @@ void printBuffer(char** buffer, int start) {
     printf("\n");
 }
 
+// helper function to copy char** for copying list of token
+char** copy(char** tokenList) {
+    // malloc for outside list
+    char** copyList = malloc(MAX_CMD_BUFFER * sizeof(char*));
+    int i = 0;
+    while (tokenList[i] != NULL) {
+        // malloc for inside list
+        copyList[i] = malloc(strlen(tokenList[i]) * sizeof(char));
+        copyList[i] = strdup(tokenList[i]);
+        i++;
+    }
+    copyList[i] = NULL;
+    return copyList;
+}
+
+// running an external program (ex. ls)
+void externalProg(char** shellCMD) {
+    int status;
+    int pid;
+ 
+    /* Create a process space for the ls */
+    if ((pid = fork()) < 0) {
+        perror("Fork failed");
+        exit(1);
+
+    } else if (!pid) {
+        /* This is the child, so execute the ls */ 
+        status = execvp(shellCMD[0], shellCMD);   // execute the command
+
+        // execvp unsuccessful
+        if (status == -1) {
+            printf("bad command");
+        }
+        exit(1);
+
+    } else if (pid) {
+        /* We're in the parent; let's wait for the child to finish */
+        waitpid(pid, NULL, 0);
+      }
+}
+
 void command(char** buffer, char** prev_buffer) {
 
     // echo
@@ -86,23 +127,9 @@ void command(char** buffer, char** prev_buffer) {
         // do nothing
 
     } else {
-        printf("bad command\n");
+        // printf("bad command\n");
+        externalProg(buffer);
     }
-}
-
-// helper function to copy char** for copying list of token
-char** copy(char** tokenList) {
-    // malloc for outside list
-    char** copyList = malloc(MAX_CMD_BUFFER * sizeof(char*));
-    int i = 0;
-    while (tokenList[i] != NULL) {
-        // malloc for inside list
-        copyList[i] = malloc(strlen(tokenList[i]) * sizeof(char));
-        copyList[i] = strdup(tokenList[i]);
-        i++;
-    }
-    copyList[i] = NULL;
-    return copyList;
 }
 
 void readScript(FILE *file) {
