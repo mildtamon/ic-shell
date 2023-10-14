@@ -9,10 +9,12 @@
 #include "ctype.h"
 #include "unistd.h"
 #include "signal.h"
+#include "fcntl.h"
 
 #define MAX_CMD_BUFFER 255
 
 int fgJob = 0;
+char** IOfileName;
 
 char** tokenize(char buffer[]) {
     char *token = strtok(buffer, " \t\n");
@@ -80,6 +82,35 @@ void externalProg(char** shellCMD) {
       }
 }
 
+void IOredir(char** args) {
+
+    int in = dup(0);    // duplicate the file descriptor 0, corresponds to stdin
+    int out = dup(1);   // duplicate the file descriptor 1, corresponds to stdout
+
+    for (int i = 0; args[i] != NULL; i++) {
+        if (strcmp(args[i], "<") == 0 && *IOfileName != NULL) {
+            in = open(*IOfileName, O_RDONLY);
+            if (in == -1) {
+                perror("Input file not found");
+                exit(EXIT_FAILURE);
+            }
+            dup2(in, 0);    // Redirect stdin
+            close(in);
+            args[i] = NULL; // Remove '<' and the input file from the argument list
+
+        } else if (strcmp(args[i], ">") == 0 && *IOfileName != NULL) {
+            out = open(*IOfileName, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+            if (out == -1) {
+                perror("Error opening output file");
+                exit(EXIT_FAILURE);
+            }
+            dup2(out, 1);   // Redirect stdout
+            close(out);
+            args[i] = NULL; // Remove '>' and the output file from the argument list
+        }
+    }
+}
+
 void command(char** buffer, char** prev_buffer) {
 
     // echo
@@ -131,8 +162,29 @@ void command(char** buffer, char** prev_buffer) {
         // do nothing
 
     } else {
-        // printf("bad command\n");
-        externalProg(buffer);
+        int containIO = 0;
+        // check if contains '<' or '>'
+        for (int i = 0; buffer[i] != NULL; i++) {
+            if (strcmp(buffer[i], "<") == 0 || strcmp(buffer[i], ">") == 0) {
+                containIO = 1;
+                IOfileName = &buffer[i + 1];     // set the next item to be file name
+                break;
+            }
+        }
+        if (containIO != 0) {
+            if (fork() == 0) {
+                IOredir(buffer);
+                // IOredir(IOfileName);
+                execvp(buffer[0], buffer);
+                perror("execvp");
+                exit(EXIT_FAILURE);
+            } else {
+                wait(NULL);
+            }
+        } else {
+            // printf("bad command\n");
+            externalProg(buffer);
+        }
     }
 }
 
@@ -161,7 +213,7 @@ void signalHandler(int sig, siginfo_t *sip, void *notused) {
 
     if (sig == SIGCHLD) {
         int status;
-        
+
         // printf ("The process generating the signal is PID: %d\n", sip->si_pid);
         // fflush (stdout);
         
