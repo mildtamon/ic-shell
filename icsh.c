@@ -13,7 +13,17 @@
 
 #define MAX_CMD_BUFFER 255
 
+typedef struct {
+    pid_t pid;
+    int jobID;
+    char* buffer;
+    int status;
+    int stop;
+} Job;
+
 int fgJob = 0;
+int bgJob = 0;
+Job jobs[255];
 char** IOfileName;
 
 char** tokenize(char buffer[]) {
@@ -157,29 +167,64 @@ void command(char** buffer, char** prev_buffer) {
         exit(exit_num & 0xFF);   // truncate to fit in 8 bits
     }
 
+    // jobs
+    else if (strcmp(buffer[0], "jobs") == 0) {
+        // printf("bgJob: %d\n", bgJob);
+        for (int i = 0; i < bgJob; i++) {
+            if (jobs[i].stop == 1) {
+                printf("[%d]- Stopped \t%s\n", jobs[i].jobID, jobs[i].buffer);
+            } else if (jobs[i].status == 0) {
+                printf("[%d]- Running \t%s\n", jobs[i].jobID, jobs[i].buffer);
+            }
+        }
+    }
+
     // ## comment
     else if (strcmp(buffer[0], "##") == 0) {
         // do nothing
 
     } else {
         int containIO = 0;
-        // check if contains '<' or '>'
+        int containBG = 0;
+        // check if contains '<', '>', '&'
         for (int i = 0; buffer[i] != NULL; i++) {
             if (strcmp(buffer[i], "<") == 0 || strcmp(buffer[i], ">") == 0) {
                 containIO = 1;
                 IOfileName = &buffer[i + 1];     // set the next item to be file name
+                break;
+
+            } else if (strcmp(buffer[i], "&") == 0) {
+                containBG = 1;
+                buffer[i] = NULL;   //remove "&"
                 break;
             }
         }
         if (containIO != 0) {
             if (fork() == 0) {
                 IOredir(buffer);
-                // IOredir(IOfileName);
                 execvp(buffer[0], buffer);
                 perror("execvp");
                 exit(EXIT_FAILURE);
             } else {
                 wait(NULL);
+            }
+        } else if (containBG != 0) {
+            if (fork() == 0) {
+                fgJob = 0;
+                // externalProg(buffer);
+                exit(EXIT_FAILURE);
+            } else {
+                // add job
+                printBuffer(buffer, 0);
+                jobs[bgJob].jobID = bgJob;
+                jobs[bgJob].buffer = buffer[0];
+                jobs[bgJob].pid = getpid();
+                jobs[bgJob].status = 0;
+                jobs[bgJob].stop = 0;
+                bgJob += 1;
+
+                int status;
+                waitpid(-1, &status, WNOHANG);
             }
         } else {
             // printf("bad command\n");
@@ -212,12 +257,7 @@ void signalHandler(int sig, siginfo_t *sip, void *notused) {
     pid_t pid = getpid();
 
     if (sig == SIGCHLD) {
-        int status;
-
-        // printf ("The process generating the signal is PID: %d\n", sip->si_pid);
-        // fflush (stdout);
-        
-        status = 0;
+        int status = 0;
 
         /* The WNOHANG flag means that if there's no news, we don't wait*/
         if (sip->si_pid == waitpid (sip->si_pid, &status, WNOHANG)) {
@@ -232,9 +272,10 @@ void signalHandler(int sig, siginfo_t *sip, void *notused) {
     // SIGTSTP
     if (sig == SIGTSTP && fgJob) {
         // move to background job, set foreground job to 0
-        fgJob = 0;
         kill(pid, SIGTSTP);
         printf("\nprocess stopped.\n");
+        jobs[fgJob].stop = 1;
+        fgJob = 0;
         return;
     }
 
