@@ -14,17 +14,17 @@
 #define MAX_CMD_BUFFER 255
 
 typedef struct {
-    pid_t pid;
-    int jobID;
-    char* buffer;
-    int status;
-    int stop;
+    pid_t pid;      // pid
+    int jobID;      // ID running from 1 ~
+    char* JobName;  // command
+    int stop;       // 0 = running, 1 = stop, 2 = done
 } Job;
 
 int fgJob = 0;
 int bgJob = 0;
 Job jobs[255];
 char** IOfileName;
+FILE *logFp;
 
 char** tokenize(char buffer[]) {
     char *token = strtok(buffer, " \t\n");
@@ -65,6 +65,18 @@ char** copy(char** tokenList) {
     return copyList;
 }
 
+void updateJobs(int status) {
+    pid_t pid;
+    for (int i = 1; i <= bgJob; i++){
+        pid = waitpid(jobs[i].pid, &status, WNOHANG); 
+        if(pid > 0) {
+            if (WIFEXITED(status)) { 
+                jobs[i].stop = 2; 
+            }
+        }
+    }
+}
+
 // running an external program (ex. ls)
 void externalProg(char** shellCMD) {
     int status;
@@ -87,8 +99,9 @@ void externalProg(char** shellCMD) {
     } else if (pid) {
         /* We're in the parent; let's wait for the child to finish */
         fgJob = 1;
-        waitpid(pid, NULL, 0);
+        waitpid(pid, status, 0);
         fgJob = 0;  // set foreground job = 0 after finish
+        updateJobs(status);    // if job is done, change stop to 2
       }
 }
 
@@ -102,7 +115,7 @@ void IOredir(char** args) {
             in = open(*IOfileName, O_RDONLY);
             if (in == -1) {
                 perror("Input file not found");
-                exit(EXIT_FAILURE);
+                exit(1);
             }
             dup2(in, 0);    // Redirect stdin
             close(in);
@@ -112,12 +125,27 @@ void IOredir(char** args) {
             out = open(*IOfileName, O_WRONLY | O_CREAT | O_TRUNC, 0666);
             if (out == -1) {
                 perror("Error opening output file");
-                exit(EXIT_FAILURE);
+                exit(1);
             }
             dup2(out, 1);   // Redirect stdout
             close(out);
             args[i] = NULL; // Remove '>' and the output file from the argument list
         }
+    }
+}
+
+// print log file - extra feature
+void cmdLog() {
+    FILE* fp = fopen("log.txt", "r");
+    // char c;
+    if (fp == NULL) {
+        perror("error opening file\n"); 
+    } else {
+        char buf[MAX_CMD_BUFFER];
+        while (fgets(buf, sizeof(buf), fp) != NULL) {
+        fputs(buf, stdout);
+    }
+    fclose(fp);
     }
 }
 
@@ -129,7 +157,7 @@ void command(char** buffer, char** prev_buffer) {
             // read exit number from file
             FILE *fp = fopen("exitNum", "r");
             if (fp == NULL) {
-                printf("no previous exit number\n");
+                perror("no previous exit number\n");
             } else {
                 char num[MAX_CMD_BUFFER];
                 while (fgets(num, sizeof(num), fp) != NULL) {
@@ -137,6 +165,20 @@ void command(char** buffer, char** prev_buffer) {
                     printf("\n");
                     fclose(fp);
                 }
+            }
+        } else if (strcmp(buffer[1], "<") == 0) {
+            // echo from input text
+            char** fileName = &buffer[2];
+            FILE* fp = fopen(*fileName, "r");
+            // char c;
+            if (fp == NULL) {
+                perror("error opening file\n"); 
+            } else {
+                char buf[MAX_CMD_BUFFER];
+                while (fgets(buf, sizeof(buf), fp) != NULL) {
+                    fputs(buf, stdout);
+                }
+                fclose(fp);
             }
         } else {
             printBuffer(buffer, 1);
@@ -163,18 +205,19 @@ void command(char** buffer, char** prev_buffer) {
         fputs(buffer[1], fp);
         fclose(fp);
 
-        printf("Closing IC shell\n");
+        printf("\033[3;34m Closing IC shell\n\033[0m");
         exit(exit_num & 0xFF);   // truncate to fit in 8 bits
     }
 
     // jobs
-    else if (strcmp(buffer[0], "jobs") == 0) {
-        // printf("bgJob: %d\n", bgJob);
-        for (int i = 0; i < bgJob; i++) {
-            if (jobs[i].stop == 1) {
-                printf("[%d]- Stopped \t%s\n", jobs[i].jobID, jobs[i].buffer);
-            } else if (jobs[i].status == 0) {
-                printf("[%d]- Running \t%s\n", jobs[i].jobID, jobs[i].buffer);
+    else if (strcmp(buffer[0], "jobs") == 0) {    
+        for (int i = 1; i <= bgJob; i++) {
+            if (jobs[i].stop == 0) {
+                printf("[%d]- Running \t\t%s\n", jobs[i].jobID, jobs[i].JobName);
+            } else if (jobs[i].stop == 1) {
+                printf("[%d]- Stopped \t\t%s\n", jobs[i].jobID, jobs[i].JobName);
+            } else if (jobs[i].stop == 2) {
+                printf("[%d]- Done \t\t%s\n", jobs[i].jobID, jobs[i].JobName);
             }
         }
     }
@@ -182,7 +225,12 @@ void command(char** buffer, char** prev_buffer) {
     // ## comment
     else if (strcmp(buffer[0], "##") == 0) {
         // do nothing
+    } 
 
+    // cmdLog
+    else if (strcmp(buffer[0], "cmdLog") == 0) {
+        // do nothing (support somewhere else)
+    
     } else {
         int containIO = 0;
         int containBG = 0;
@@ -204,24 +252,29 @@ void command(char** buffer, char** prev_buffer) {
                 IOredir(buffer);
                 execvp(buffer[0], buffer);
                 perror("execvp");
-                exit(EXIT_FAILURE);
+                exit(1);
             } else {
                 wait(NULL);
             }
         } else if (containBG != 0) {
-            if (fork() == 0) {
+            pid_t pid = fork();
+            if (pid == 0) {
                 fgJob = 0;
-                // externalProg(buffer);
-                exit(EXIT_FAILURE);
+                externalProg(buffer);
+                exit(1);
             } else {
+                // change char** buffer to char* jobName to be passed in jobs[i].jobName
+                char* jobName = calloc(255, sizeof(char));
+                for (int i = 0; buffer[i] != NULL; i++) {
+                    strcat(jobName, buffer[i]);
+                    strcat(jobName, " ");
+                }
                 // add job
-                printBuffer(buffer, 0);
-                jobs[bgJob].jobID = bgJob;
-                jobs[bgJob].buffer = buffer[0];
-                jobs[bgJob].pid = getpid();
-                jobs[bgJob].status = 0;
-                jobs[bgJob].stop = 0;
                 bgJob += 1;
+                jobs[bgJob].jobID = bgJob;
+                jobs[bgJob].JobName = jobName;
+                jobs[bgJob].pid = pid;
+                jobs[bgJob].stop = 0;
 
                 int status;
                 waitpid(-1, &status, WNOHANG);
@@ -301,6 +354,8 @@ int main(int arg, char *argv[]) {
     sigaction(SIGTSTP, &action, NULL);
     sigaction(SIGINT, &action, NULL);
 
+    logFp = fopen("log.txt", "w");
+
     // script mode
     if (arg > 1) {
         // create a FILE from argument (file path) - read mode
@@ -311,12 +366,30 @@ int main(int arg, char *argv[]) {
     } else {
         char buffer[MAX_CMD_BUFFER];
         char** prev_buffer = NULL;
-        printf("Starting IC shell\n");
+
+        // set text color
+        printf("\033[3;34m Starting IC shell\n\033[0m");
+
         while (1) {
-            printf("icsh $ ");
+            printf("\033[1;34;44m icsh ♥︎ \033[0m ");
             fgets(buffer, 255, stdin);
             // printf("you said: %s\n", buffer);
             char** curr_buffer = tokenize(buffer);
+
+            // command log - extra feature
+            if (strcmp(curr_buffer[0], "cmdLog") == 0) {
+                cmdLog();
+            }
+            else {
+                logFp = fopen("log.txt", "a");
+                for (int i = 0; curr_buffer[i] != NULL; i++) {
+                    fprintf(logFp, "%s", curr_buffer[i]);
+                    if (curr_buffer[i] != NULL) { fprintf(logFp, " "); }
+                }
+                fprintf(logFp, "\n");
+                fclose(logFp);
+            }
+
             command(curr_buffer, prev_buffer);
             prev_buffer = copy(curr_buffer);
             free(curr_buffer);      // free current buffer before getting replace if still in loop
